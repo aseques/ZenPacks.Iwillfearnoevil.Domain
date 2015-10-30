@@ -123,6 +123,7 @@ DATE="/bin/date"
 CUT="/usr/bin/cut"
 # Place to stash temporary files
 WHOIS_TMP="/var/tmp/whois.$$"
+LIST_TLD="/var/tmp/list_tld"
 
 #############################################################################
 # Purpose: Convert a date from MONTH-DAY-YEAR to Julian format
@@ -208,6 +209,19 @@ tolower()
 }
 
 ##################################################################
+# Purpose: Extract only the domain part from a hostname that might
+# 	    include subdomains
+# Arguments:
+#   $1 -> Hostname to check
+##################################################################
+get_domain()
+{
+     local DOMAIN=$(echo -n $1 | grep -o -f "$LIST_TLD" - \
+         | sort | uniq)
+     echo $DOMAIN
+}
+
+##################################################################
 # Purpose: Access whois data to grab the registrar and expiration date
 # Arguments:
 #   $1 -> Domain to check
@@ -264,7 +278,6 @@ check_domain_status()
     fi
 
 #####
-
 
     # If the Registrar is NULL, then we didn't get any data
     if [ "${REGISTRAR}" = "" ]
@@ -414,6 +427,8 @@ do
 		n) NAGIOS="TRUE";;
                 \?) usage
                     exit 1;;
+		*) usage
+		    exit 1;;
         esac
 done
 
@@ -422,7 +437,7 @@ if [ ! -f ${WHOIS} ]
 then
 	if [ "${NAGIOS}" = "TRUE" ]
 	then
-		echo "Status Warning script failure | missing bunary ${WHOIS} file ."
+		echo "Status Warning script failure | missing binary ${WHOIS} file ."
 	else
         echo "ERROR: The whois binary does not exist in ${WHOIS} ."
         echo "  FIX: Please modify the \$WHOIS variable in the program header."
@@ -443,6 +458,16 @@ then
         exit 1
 fi
 
+### Prepare the file with the whole list of tld (including 2nd level) when needed
+if [ ! -f $LIST_TLD ] || test "`find $LIST_TLD -mtime +10`"
+then
+	echo "tld file ($LIST_TLD) missing or older than 10 days, regenerating"
+        LIST_URL="https://publicsuffix.org/list/public_suffix_list.dat"
+        curl -s "$LIST_URL" \
+        | grep -v "^\s*$\|^\s*//" \
+        | sed -e 's/\./\\./g' -e 's/\*/.*/' -e 's/^\(.*\)$/[^.]\\+\\.\1$/' > $LIST_TLD
+fi
+
 ### Baseline the dates so we have something to compare to
 MONTH=$(${DATE} "+%m")
 DAY=$(${DATE} "+%d")
@@ -456,7 +481,7 @@ touch ${WHOIS_TMP}
 if [ "${DOMAIN}" != "" ]
 then
         print_heading
-        check_domain_status "${DOMAIN}"
+	check_domain_status `get_domain "$DOMAIN"`
 ### If a file and a "-a" are passed on the command line, check all
 ### of the domains in the file to see if they are about to expire
 elif [ -f "${SERVERFILE}" ]
@@ -464,8 +489,7 @@ then
         print_heading
         while read DOMAIN
         do
-                check_domain_status "${DOMAIN}"
-
+                check_domain_status `get_domain "$DOMAIN"`
         done < ${SERVERFILE}
 
 ### There was an error, so print a detailed usage message and exit
